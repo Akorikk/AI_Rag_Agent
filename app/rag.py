@@ -1,83 +1,63 @@
 import os
 from typing import List, Tuple
-
-import faiss
-import numpy as np
-from pypdf import PdfReader
 from sentence_transformers import SentenceTransformer
+import numpy as np
+import faiss
+from pypdf import PdfReader
 
-# ========== CONFIG ==========
+# ================= CONFIG =================
 DATA_DIR = "data/documents"
-CHUNK_SIZE = 500
-CHUNK_OVERLAP = 100
+CHUNK_SIZE = 400           # ↓ smaller chunks = less RAM
+CHUNK_OVERLAP = 50
+EMBED_MODEL_NAME = "all-MiniLM-L6-v2"  # ✅ light & free
 
-# Local embedding model (FREE, no API key)
-EMBEDDING_DIMENSION = 384
-embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
+# Load embedding model lazily
+_embedding_model = None
+
+def get_embedding_model():
+    global _embedding_model
+    if _embedding_model is None:
+        _embedding_model = SentenceTransformer(EMBED_MODEL_NAME)
+    return _embedding_model
 
 
-# ========== HELPERS ==========
+# ================= HELPERS =================
 def load_pdfs(data_dir: str) -> List[Tuple[str, str]]:
-    """
-    Load PDFs and return list of (document_name, full_text)
-    """
     documents = []
-
     for file in os.listdir(data_dir):
-        if file.lower().endswith(".pdf"):
-            path = os.path.join(data_dir, file)
-            reader = PdfReader(path)
-
+        if file.endswith(".pdf"):
+            reader = PdfReader(os.path.join(data_dir, file))
             text = ""
             for page in reader.pages:
                 text += page.extract_text() or ""
-
             documents.append((file, text))
-
     return documents
 
 
 def chunk_text(text: str) -> List[str]:
-    """
-    Split text into overlapping chunks
-    """
     chunks = []
     start = 0
-
     while start < len(text):
-        end = start + CHUNK_SIZE
-        chunk = text[start:end]
-        chunks.append(chunk)
+        chunks.append(text[start:start + CHUNK_SIZE])
         start += CHUNK_SIZE - CHUNK_OVERLAP
-
     return chunks
 
 
 def embed_texts(texts: List[str]) -> np.ndarray:
-    """
-    Generate embeddings locally using SentenceTransformers
-    """
-    embeddings = embedding_model.encode(
-        texts,
-        show_progress_bar=False,
-        convert_to_numpy=True
-    )
-    return embeddings.astype("float32")
+    model = get_embedding_model()
+    return model.encode(texts, show_progress_bar=False)
 
 
-# ========== RAG CLASS ==========
+# ================= RAG PIPELINE =================
 class RAGPipeline:
     def __init__(self):
         self.index = None
-        self.text_chunks: List[str] = []
-        self.sources: List[str] = []
-        self.built = False
+        self.text_chunks = []
+        self.sources = []
+        self.is_built = False
 
     def build_index(self):
-        """
-        Load documents, chunk them, embed them, and store in FAISS
-        """
-        if self.built:
+        if self.is_built:
             return
 
         documents = load_pdfs(DATA_DIR)
@@ -92,34 +72,30 @@ class RAGPipeline:
 
         embeddings = embed_texts(all_chunks)
 
-        self.index = faiss.IndexFlatL2(EMBEDDING_DIMENSION)
-        self.index.add(embeddings)
+        dim = embeddings.shape[1]
+        self.index = faiss.IndexFlatL2(dim)
+        self.index.add(embeddings.astype("float32"))
 
         self.text_chunks = all_chunks
         self.sources = all_sources
-        self.built = True
+        self.is_built = True
 
-    def retrieve(self, query: str, top_k: int = 3) -> Tuple[str, List[str]]:
-        """
-        Retrieve relevant chunks for a query
-        """
-        if not self.built:
+    def retrieve(self, query: str, top_k: int = 3):
+        if not self.is_built:
             self.build_index()
 
-        query_embedding = embed_texts([query])
-        distances, indices = self.index.search(query_embedding, top_k)
+        query_vec = embed_texts([query]).astype("float32")
+        _, indices = self.index.search(query_vec, top_k)
 
-        retrieved_chunks = []
-        retrieved_sources = set()
+        context = []
+        sources = set()
 
         for idx in indices[0]:
-            if idx < len(self.text_chunks):
-                retrieved_chunks.append(self.text_chunks[idx])
-                retrieved_sources.add(self.sources[idx])
+            context.append(self.text_chunks[idx])
+            sources.add(self.sources[idx])
 
-        context = "\n\n".join(retrieved_chunks)
-
-        return context, list(retrieved_sources)
+        return "\n\n".join(context), list(sources)
 
 
+# Singleton
 rag_pipeline = RAGPipeline()

@@ -7,32 +7,29 @@ from app.rag import rag_pipeline
 
 load_dotenv()
 
-# OpenAI / Azure OpenAI client
+# ================= OpenAI Client =================
 client = OpenAI(
     api_key=os.getenv("OPENAI_API_KEY")
 )
 
-# -------------------------------
-# Simple in-memory session memory
-# -------------------------------
+# ================= Session Memory =================
+# Lightweight in-memory session memory (OK for demo)
 SESSION_MEMORY: Dict[str, List[Dict[str, str]]] = {}
 
 
 def get_session_history(session_id: str) -> List[Dict[str, str]]:
-    """Get conversation history for a session"""
     return SESSION_MEMORY.get(session_id, [])
 
 
 def update_session_history(session_id: str, role: str, content: str):
-    """Update session memory"""
     if session_id not in SESSION_MEMORY:
         SESSION_MEMORY[session_id] = []
-    SESSION_MEMORY[session_id].append({"role": role, "content": content})
+    SESSION_MEMORY[session_id].append(
+        {"role": role, "content": content}
+    )
 
 
-# -------------------------------
-# Agent decision prompt
-# -------------------------------
+# ================= Decision Prompt =================
 DECISION_PROMPT = """
 You are an AI agent.
 
@@ -54,8 +51,9 @@ Respond ONLY in valid JSON:
 
 
 def decide_route(query: str) -> str:
-    """Decide whether to use RAG or direct LLM answer"""
-
+    """
+    Decide whether to answer directly or use RAG
+    """
     response = client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[
@@ -65,34 +63,30 @@ def decide_route(query: str) -> str:
         temperature=0
     )
 
-    decision_json = response.choices[0].message.content.lower()
+    content = response.choices[0].message.content.lower()
 
-    if "rag" in decision_json:
+    if "rag" in content:
         return "rag"
     return "direct"
 
 
-# -------------------------------
-# Tool: RAG search
-# -------------------------------
+# ================= RAG Tool =================
 def rag_tool(query: str):
-    """Tool that retrieves context from documents"""
+    """
+    Retrieve context from internal documents
+    (Index is built lazily inside rag_pipeline)
+    """
     context, sources = rag_pipeline.retrieve(query)
     return context, sources
 
 
-# -------------------------------
-# Main agent entry point
-# -------------------------------
+# ================= Main Agent =================
 def run_agent(query: str, session_id: str = "default") -> Dict:
     """
-    Main agent function
+    Main agent entry point
     """
-    # Initialize RAG index once
-    if rag_pipeline.index is None:
-        rag_pipeline.build_index()
 
-    # Store user query in memory
+    # Store user query
     update_session_history(session_id, "user", query)
 
     # Decide route
@@ -101,8 +95,8 @@ def run_agent(query: str, session_id: str = "default") -> Dict:
     # Get conversation history
     history = get_session_history(session_id)
 
+    # -------- DIRECT ANSWER --------
     if route == "direct":
-        # Direct LLM response
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=history + [
@@ -114,8 +108,8 @@ def run_agent(query: str, session_id: str = "default") -> Dict:
         answer = response.choices[0].message.content
         sources = []
 
+    # -------- RAG ANSWER --------
     else:
-        # RAG-based response
         context, sources = rag_tool(query)
 
         rag_prompt = f"""
@@ -141,7 +135,7 @@ Question:
 
         answer = response.choices[0].message.content
 
-    # Store assistant response
+    # Store assistant reply
     update_session_history(session_id, "assistant", answer)
 
     return {

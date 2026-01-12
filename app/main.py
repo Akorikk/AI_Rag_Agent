@@ -1,22 +1,18 @@
 from fastapi import FastAPI
 from pydantic import BaseModel
 from typing import Optional, List
-import uvicorn
+import os
 
 from app.agent import run_agent
 
-
-# FastAPI app initialization
-
+# ================= FastAPI App =================
 app = FastAPI(
     title="AI Agent with RAG",
     description="AI agent that answers questions using direct LLM or RAG over internal documents",
     version="1.0.0"
 )
 
-
-# Request / Response schemas
-
+# ================= Schemas =================
 class AskRequest(BaseModel):
     query: str
     session_id: Optional[str] = "default"
@@ -27,9 +23,7 @@ class AskResponse(BaseModel):
     source: List[str]
 
 
-
-# API endpoint
-
+# ================= API Endpoint =================
 @app.post("/ask", response_model=AskResponse)
 def ask_question(request: AskRequest):
     """
@@ -47,12 +41,21 @@ def ask_question(request: AskRequest):
     )
 
 
-# Local development entrypoint
+# ================= Health Check (IMPORTANT for Render) =================
+@app.get("/")
+def health():
+    return {"status": "ok", "service": "AI RAG Agent"}
+
+
+# ================= Entry Point =================
+# NOTE:
 
 if __name__ == "__main__":
+    import uvicorn
+
     uvicorn.run(
         "app.main:app",
         host="0.0.0.0",
-        port=8000,
-        reload=True
+        port=int(os.getenv("PORT", 8000)),
+        reload=False
     )
