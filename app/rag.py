@@ -4,21 +4,17 @@ from typing import List, Tuple
 import faiss
 import numpy as np
 from pypdf import PdfReader
-from dotenv import load_dotenv
-from openai import OpenAI
-
-load_dotenv()
+from sentence_transformers import SentenceTransformer
 
 # ========== CONFIG ==========
 DATA_DIR = "data/documents"
 CHUNK_SIZE = 500
 CHUNK_OVERLAP = 100
-EMBEDDING_MODEL = "text-embedding-3-small"
 
-# OpenAI / Azure OpenAI client
-client = OpenAI(
-    api_key=os.getenv("OPENAI_API_KEY")
-)
+# Local embedding model (FREE, no API key)
+EMBEDDING_DIMENSION = 384
+embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
+
 
 # ========== HELPERS ==========
 def load_pdfs(data_dir: str) -> List[Tuple[str, str]]:
@@ -57,28 +53,33 @@ def chunk_text(text: str) -> List[str]:
     return chunks
 
 
-def embed_texts(texts: List[str]) -> List[List[float]]:
+def embed_texts(texts: List[str]) -> np.ndarray:
     """
-    Generate embeddings for a list of texts
+    Generate embeddings locally using SentenceTransformers
     """
-    response = client.embeddings.create(
-        model=EMBEDDING_MODEL,
-        input=texts
+    embeddings = embedding_model.encode(
+        texts,
+        show_progress_bar=False,
+        convert_to_numpy=True
     )
-    return [item.embedding for item in response.data]
+    return embeddings.astype("float32")
 
 
 # ========== RAG CLASS ==========
 class RAGPipeline:
     def __init__(self):
         self.index = None
-        self.text_chunks = []
-        self.sources = []
+        self.text_chunks: List[str] = []
+        self.sources: List[str] = []
+        self.built = False
 
     def build_index(self):
         """
         Load documents, chunk them, embed them, and store in FAISS
         """
+        if self.built:
+            return
+
         documents = load_pdfs(DATA_DIR)
 
         all_chunks = []
@@ -91,33 +92,34 @@ class RAGPipeline:
 
         embeddings = embed_texts(all_chunks)
 
-        dimension = len(embeddings[0])
-        self.index = faiss.IndexFlatL2(dimension)
-        self.index.add(np.array(embeddings).astype("float32"))
+        self.index = faiss.IndexFlatL2(EMBEDDING_DIMENSION)
+        self.index.add(embeddings)
 
         self.text_chunks = all_chunks
         self.sources = all_sources
+        self.built = True
 
     def retrieve(self, query: str, top_k: int = 3) -> Tuple[str, List[str]]:
         """
         Retrieve relevant chunks for a query
         """
-        query_embedding = embed_texts([query])[0]
-        query_embedding = np.array([query_embedding]).astype("float32")
+        if not self.built:
+            self.build_index()
 
+        query_embedding = embed_texts([query])
         distances, indices = self.index.search(query_embedding, top_k)
 
         retrieved_chunks = []
         retrieved_sources = set()
 
         for idx in indices[0]:
-            retrieved_chunks.append(self.text_chunks[idx])
-            retrieved_sources.add(self.sources[idx])
+            if idx < len(self.text_chunks):
+                retrieved_chunks.append(self.text_chunks[idx])
+                retrieved_sources.add(self.sources[idx])
 
         context = "\n\n".join(retrieved_chunks)
 
         return context, list(retrieved_sources)
 
 
-# ========== SINGLETON ==========
 rag_pipeline = RAGPipeline()
