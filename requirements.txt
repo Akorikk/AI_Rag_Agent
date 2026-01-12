@@ -4,3 +4,5 @@ openai
 tiktoken
 faiss-cpu
 python-dotenv
+pypdf
+numpy
