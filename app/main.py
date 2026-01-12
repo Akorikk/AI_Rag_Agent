@@ -5,18 +5,18 @@ import uvicorn
 
 from app.agent import run_agent
 
-# -----------------------------
+
 # FastAPI app initialization
-# -----------------------------
+
 app = FastAPI(
     title="AI Agent with RAG",
     description="AI agent that answers questions using direct LLM or RAG over internal documents",
     version="1.0.0"
 )
 
-# -----------------------------
+
 # Request / Response schemas
-# -----------------------------
+
 class AskRequest(BaseModel):
     query: str
     session_id: Optional[str] = "default"
@@ -27,9 +27,9 @@ class AskResponse(BaseModel):
     source: List[str]
 
 
-# -----------------------------
+
 # API endpoint
-# -----------------------------
+
 @app.post("/ask", response_model=AskResponse)
 def ask_question(request: AskRequest):
     """
@@ -47,9 +47,8 @@ def ask_question(request: AskRequest):
     )
 
 
-# -----------------------------
 # Local development entrypoint
-# -----------------------------
+
 if __name__ == "__main__":
     uvicorn.run(
         "app.main:app",
